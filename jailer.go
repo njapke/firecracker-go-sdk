@@ -16,6 +16,7 @@ package firecracker
 import (
 	"context"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"os"
 	"os/exec"
@@ -81,6 +82,12 @@ type JailerConfig struct {
 	// ChrootStrategy will dictate how files are transfered to the root drive.
 	ChrootStrategy HandlersAdapter
 
+	// Cgroups allows setting cgroup values
+	Cgroups map[string]string
+
+	// CgroupVersion2 will switch the cgroup version used by jailer to v2 if set to true (false means v1)
+	CgroupVersion2 bool
+
 	// Stdout specifies the IO writer for STDOUT to use when spawning the jailer.
 	Stdout io.Writer
 	// Stderr specifies the IO writer for STDERR to use when spawning the jailer.
@@ -105,6 +112,9 @@ type JailerCommandBuilder struct {
 	daemonize       bool
 	firecrackerArgs []string
 
+	cgroups map[string]string
+	cgroupVersion2 bool
+
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
@@ -124,7 +134,18 @@ func (b JailerCommandBuilder) Args() []string {
 	args = append(args, "--uid", strconv.Itoa(b.uid))
 	args = append(args, "--gid", strconv.Itoa(b.gid))
 	args = append(args, "--exec-file", b.execFile)
-	args = append(args, "--node", strconv.Itoa(b.node))
+
+	//args = append(args, "--node", strconv.Itoa(b.node))
+
+	if b.cgroupVersion2 {
+		args = append(args, "--cgroup-version", "2")
+	}
+
+	if b.cgroups != nil {
+		for k,v := range b.cgroups {
+			args = append(args, "--cgroup", fmt.Sprintf("%s=%s", k, v))
+		}
+	}
 
 	if len(b.chrootBaseDir) > 0 {
 		args = append(args, "--chroot-base-dir", b.chrootBaseDir)
@@ -208,6 +229,18 @@ func (b JailerCommandBuilder) WithNetNS(path string) JailerCommandBuilder {
 // WithDaemonize will specify whether to set stdio to /dev/null
 func (b JailerCommandBuilder) WithDaemonize(daemonize bool) JailerCommandBuilder {
 	b.daemonize = daemonize
+	return b
+}
+
+// WithCgroups allows setting cgroup values
+func (b JailerCommandBuilder) WithCgroups(cgroups map[string]string) JailerCommandBuilder {
+	b.cgroups = cgroups
+	return b
+}
+
+// WithCgroupVersion2 will specify whether to cgroups v2
+func (b JailerCommandBuilder) WithCgroupVersion2(cgroupVersion2 bool) JailerCommandBuilder {
+	b.cgroupVersion2 = cgroupVersion2
 	return b
 }
 
@@ -314,6 +347,8 @@ func jail(ctx context.Context, m *Machine, cfg *Config) error {
 		WithUID(*cfg.JailerCfg.UID).
 		WithGID(*cfg.JailerCfg.GID).
 		WithNumaNode(*cfg.JailerCfg.NumaNode).
+		WithCgroups(cfg.JailerCfg.Cgroups).
+		WithCgroupVersion2(cfg.JailerCfg.CgroupVersion2).
 		WithExecFile(cfg.JailerCfg.ExecFile).
 		WithChrootBaseDir(cfg.JailerCfg.ChrootBaseDir).
 		WithDaemonize(cfg.JailerCfg.Daemonize).
@@ -337,6 +372,8 @@ func jail(ctx context.Context, m *Machine, cfg *Config) error {
 	}
 
 	m.cmd = builder.Build(ctx)
+
+	log.Info(m.cmd.String())
 
 	if err := cfg.JailerCfg.ChrootStrategy.AdaptHandlers(&m.Handlers); err != nil {
 		return err
